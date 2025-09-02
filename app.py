@@ -2,7 +2,6 @@ import os
 import requests
 import time
 import logging
-import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -22,18 +21,25 @@ HONEYPOT_API = "https://api.honeypot.is/v2/IsHoneypot"
 vistos = set()
 
 def send_telegram(msg):
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        logging.error("Token ou Chat ID não configurado!")
+        return
+        
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}
     try:
-        requests.post(url, data=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+        logging.info("Mensagem enviada com sucesso!")
     except Exception as e:
         logging.error(f"Erro ao enviar mensagem Telegram: {e}")
 
 def get_new_pairs(chain):
     url = f"https://api.dexscreener.com/latest/dex/pairs/{chain}"
     try:
-        r = requests.get(url, timeout=15)
-        return r.json().get("pairs", [])
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        return response.json().get("pairs", [])
     except Exception as e:
         logging.error(f"Erro Dex {chain}: {e}")
         return []
@@ -53,8 +59,10 @@ def score_volume(vol):
 def check_honeypot(chain, contract):
     try:
         url = f"{HONEYPOT_API}?chain={chain}&token={contract}"
-        r = requests.get(url, timeout=15).json()
-        sim = r.get("simulation", {})
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        sim = data.get("simulation", {})
         if sim.get("isHoneypot", False):
             return 0
         buy_tax = sim.get("buyTax", 0)
@@ -78,7 +86,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('🤖 Bot de Monitoramento de Tokens Ativo!')
     await update.message.reply_text('🔍 Monitorando novos tokens nas redes...')
 
-async def check_tokens(context: ContextTypes.DEFAULT_TYPE):
+def check_tokens():
     logging.info("Verificando novos tokens...")
     for chain in CHAINS:
         pares = get_new_pairs(chain)
@@ -113,8 +121,13 @@ async def check_tokens(context: ContextTypes.DEFAULT_TYPE):
                     )
                     logging.info(f"Novo token encontrado: {token_symbol} (Score: {score})")
                     send_telegram(msg)
+                else:
+                    logging.info(f"Token {token_symbol} ignorado (score {score})")
 
-async def main():
+async def check_tokens_job(context: ContextTypes.DEFAULT_TYPE):
+    check_tokens()
+
+def main():
     # Verificar se as variáveis de ambiente estão configuradas
     if not TELEGRAM_TOKEN or not CHAT_ID:
         logging.error("Variáveis de ambiente TELEGRAM_TOKEN e CHAT_ID são necessárias!")
@@ -128,23 +141,17 @@ async def main():
     
     # Configurar job para verificar tokens a cada minuto
     job_queue = application.job_queue
-    job_queue.run_repeating(check_tokens, interval=60, first=10)
+    if job_queue:
+        job_queue.run_repeating(check_tokens_job, interval=60, first=10)
+        logging.info("JobQueue configurado com sucesso!")
+    else:
+        logging.warning("JobQueue não disponível. Usando fallback...")
+        # Fallback: verificar tokens uma vez e depois sair
+        check_tokens()
+        return
     
     # Iniciar o bot
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    
-    # Manter o bot rodando
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    except asyncio.CancelledError:
-        pass
-    finally:
-        await application.updater.stop()
-        await application.stop()
-        await application.shutdown()
+    application.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
