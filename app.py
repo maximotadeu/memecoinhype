@@ -15,16 +15,21 @@ logging.basicConfig(
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('CHAT_ID')
 
-# URLs corretas da API DexScreener (versão mais recente)
+# URLs que FUNCIONAM com a API DexScreener
 CHAINS = {
     "ethereum": {
-        "url": "https://api.dexscreener.com/latest/dex/networks/ethereum/pairs",
+        "url": "https://api.dexscreener.com/latest/dex/tokens/0x2170ed0880ac9a755fd29b2688956bd959f933f8",  # ETH
         "explorer": "https://etherscan.io/token/",
         "enabled": True
     },
     "bsc": {
-        "url": "https://api.dexscreener.com/latest/dex/networks/bsc/pairs", 
+        "url": "https://api.dexscreener.com/latest/dex/tokens/0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",  # BNB
         "explorer": "https://bscscan.com/token/",
+        "enabled": True
+    },
+    "polygon": {
+        "url": "https://api.dexscreener.com/latest/dex/tokens/0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",  # MATIC
+        "explorer": "https://polygonscan.com/token/",
         "enabled": True
     }
 }
@@ -51,14 +56,14 @@ def send_telegram(message):
         if response.status_code == 200:
             return True
         else:
-            logging.error(f"Erro Telegram {response.status_code}: {response.text}")
+            logging.error(f"Erro Telegram {response.status_code}")
             return False
     except Exception as e:
         logging.error(f"Erro Telegram: {e}")
         return False
 
-def get_all_pairs(chain):
-    """Busca todos os pares de uma chain usando API correta"""
+def get_token_pairs(chain):
+    """Busca pares de um token específico (URL que FUNCIONA)"""
     if not CHAINS[chain]["enabled"]:
         return []
     
@@ -66,7 +71,6 @@ def get_all_pairs(chain):
         response = requests.get(CHAINS[chain]["url"], timeout=15)
         if response.status_code == 200:
             data = response.json()
-            # A nova API retorna a lista diretamente
             pairs = data.get("pairs", [])
             logging.info(f"✅ {chain}: {len(pairs)} pares encontrados")
             return pairs
@@ -78,7 +82,7 @@ def get_all_pairs(chain):
         logging.error(f"❌ Erro em {chain}: {e}")
         return []
 
-def filter_recent_tokens(pairs, max_hours=6):
+def filter_recent_tokens(pairs, max_hours=24):
     """Filtra tokens recentes"""
     recent_tokens = []
     
@@ -92,12 +96,12 @@ def filter_recent_tokens(pairs, max_hours=6):
             created_time = datetime.fromtimestamp(created_at / 1000)
             age = datetime.now() - created_time
             
-            # Verificar se é recente (menos de max_hours)
+            # Verificar se é recente
             if age < timedelta(hours=max_hours):
                 recent_tokens.append(pair)
                 
         except Exception as e:
-            continue  # Ignorar erros individuais
+            continue
     
     return recent_tokens
 
@@ -106,7 +110,7 @@ def analyze_token(pair, chain):
     base_token = pair.get("baseToken", {})
     
     token_address = base_token.get("address")
-    token_name = base_token.get("name", "Unknown")[:30]
+    token_name = base_token.get("name", "Unknown")[:25]
     token_symbol = base_token.get("symbol", "UNKNOWN")
     
     liquidity = pair.get("liquidity", {}).get("usd", 0)
@@ -122,10 +126,7 @@ def analyze_token(pair, chain):
             created_time = datetime.fromtimestamp(created_at / 1000)
             age = datetime.now() - created_time
             age_hours = age.total_seconds() / 3600
-            if age_hours < 1:
-                age_str = f"{age_hours*60:.0f}min"
-            else:
-                age_str = f"{age_hours:.1f}h"
+            age_str = f"{age_hours:.1f}h"
         except:
             pass
     
@@ -134,32 +135,26 @@ def analyze_token(pair, chain):
     details = []
     
     # Idade (quanto mais novo, melhor)
-    if age_hours < 1:
-        score += 3
-        details.append(f"🆕 {age_str}")
-    elif age_hours < 3:
+    if age_hours < 6:
         score += 2
-        details.append(f"⏰ {age_str}")
-    elif age_hours < 6:
+        details.append(f"🆕 {age_str}")
+    elif age_hours < 12:
         score += 1
-        details.append(f"📅 {age_str}")
+        details.append(f"⏰ {age_str}")
     
     # Liquidez
-    if liquidity > 50000:
-        score += 3
-        details.append(f"💰 ${liquidity:,.0f}")
-    elif liquidity > 20000:
+    if liquidity > 10000:
         score += 2
-        details.append(f"💧 ${liquidity:,.0f}")
+        details.append(f"💰 ${liquidity:,.0f}")
     elif liquidity > 5000:
         score += 1
-        details.append(f"💦 ${liquidity:,.0f}")
+        details.append(f"💧 ${liquidity:,.0f}")
     
     # Volume
-    if volume_24h > 100000:
+    if volume_24h > 50000:
         score += 2
         details.append(f"📈 ${volume_24h:,.0f}")
-    elif volume_24h > 50000:
+    elif volume_24h > 20000:
         score += 1
         details.append(f"📊 ${volume_24h:,.0f}")
     
@@ -180,12 +175,12 @@ def analyze_token(pair, chain):
 
 def create_message(analysis, chain):
     """Cria mensagem para Telegram"""
-    emoji = "🚀" if analysis["score"] >= 5 else "⭐" if analysis["score"] >= 3 else "🔍"
+    emoji = "🚀" if analysis["score"] >= 4 else "⭐" if analysis["score"] >= 2 else "🔍"
     
-    message = f"{emoji} <b>NOVO TOKEN {chain.upper()}</b>\n\n"
+    message = f"{emoji} <b>TOKEN {chain.upper()}</b>\n\n"
     message += f"<b>{analysis['name']} ({analysis['symbol']})</b>\n"
     message += f"💵 <b>Preço:</b> ${analysis['price']}\n"
-    message += f"⭐ <b>Score:</b> {analysis['score']}/8\n\n"
+    message += f"⭐ <b>Score:</b> {analysis['score']}/6\n\n"
     
     message += "<b>📊 Análise:</b>\n"
     for detail in analysis["details"]:
@@ -199,7 +194,7 @@ def create_message(analysis, chain):
 
 def monitor_tokens():
     """Monitora tokens"""
-    logging.info("🔍 Procurando tokens recentes...")
+    logging.info("🔍 Procurando tokens...")
     tokens_encontrados = 0
     
     for chain in CHAINS:
@@ -207,14 +202,14 @@ def monitor_tokens():
             continue
             
         try:
-            # Buscar todos os pares
-            all_pairs = get_all_pairs(chain)
+            # Buscar pares do token base
+            all_pairs = get_token_pairs(chain)
             
             if not all_pairs:
                 continue
             
-            # Filtrar apenas os recentes (últimas 6 horas)
-            recent_pairs = filter_recent_tokens(all_pairs, max_hours=6)
+            # Filtrar apenas os recentes
+            recent_pairs = filter_recent_tokens(all_pairs, max_hours=24)
             
             logging.info(f"📊 {chain}: {len(recent_pairs)} tokens recentes")
             
@@ -226,13 +221,13 @@ def monitor_tokens():
                     
                     analysis = analyze_token(pair, chain)
                     
-                    # Notificar tokens promissores (score >= 3)
-                    if analysis["score"] >= 3:
+                    # Notificar tokens interessantes
+                    if analysis["score"] >= 2:
                         message = create_message(analysis, chain)
                         if send_telegram(message):
                             tokens_encontrados += 1
                             logging.info(f"✅ {chain}: {analysis['symbol']} (Score: {analysis['score']})")
-                        time.sleep(1)  # Evitar spam
+                        time.sleep(1)
                     
         except Exception as e:
             logging.error(f"Erro em {chain}: {e}")
@@ -248,7 +243,7 @@ def main():
     logging.info("🤖 Bot iniciado! Monitorando tokens...")
     
     # Testar conexão com Telegram
-    if send_telegram("🤖 <b>Bot iniciado!</b>\n🔍 Monitorando tokens novos..."):
+    if send_telegram("🤖 <b>Bot iniciado!</b>\n🔍 Monitorando tokens..."):
         logging.info("✅ Conexão com Telegram OK!")
     else:
         logging.error("❌ Falha na conexão com Telegram!")
@@ -260,12 +255,12 @@ def main():
             tokens_encontrados = monitor_tokens()
             
             if tokens_encontrados > 0:
-                logging.info(f"🎉 {tokens_encontrados} novos tokens encontrados!")
+                logging.info(f"🎉 {tokens_encontrados} tokens encontrados!")
             else:
                 logging.info("⏭ Nenhum token novo encontrado")
             
-            # Esperar tempo aleatório entre 5-8 minutos
-            wait_time = random.randint(300, 480)
+            # Esperar tempo aleatório entre 10-15 minutos
+            wait_time = random.randint(600, 900)
             logging.info(f"⏳ Próxima verificação em {wait_time//60} minutos...")
             time.sleep(wait_time)
             
