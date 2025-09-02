@@ -15,31 +15,42 @@ logging.basicConfig(
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('CHAT_ID')
 
-# APIs de segurança REAIS
+# APIs de segurança
 HONEYPOT_API = "https://api.honeypot.is/v2/IsHoneypot"
 RUGCHECK_API = "https://api.rugcheck.xyz/tokens"
-BSCSCAN_API = "https://api.bscscan.com/api"
-ETHSCAN_API = "https://api.etherscan.io/api"
 
-# Suas API Keys (adicionar depois no Render)
-BSCSCAN_API_KEY = os.environ.get('BSCSCAN_API_KEY', 'YourApiKeyToken')
+# API UNIFICADA Etherscan (suporta múltiplas chains)
+ETHERSCAN_UNIFIED_API = "https://api.etherscan.io/api"
 ETHERSCAN_API_KEY = os.environ.get('ETHERSCAN_API_KEY', 'YourApiKeyToken')
 
+# Chains suportadas pela API unificada Etherscan
 CHAINS = {
     "ethereum": {
         "url": "https://api.dexscreener.com/latest/dex/tokens/0x2170ed0880ac9a755fd29b2688956bd959f933f8",
         "explorer": "https://etherscan.io/token/",
         "chain_id": "eth",
-        "scan_api": ETHSCAN_API,
-        "api_key": ETHERSCAN_API_KEY,
+        "network": "eth",  # Para API unificada
         "enabled": True
     },
     "bsc": {
         "url": "https://api.dexscreener.com/latest/dex/tokens/0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
         "explorer": "https://bscscan.com/token/", 
         "chain_id": "bsc",
-        "scan_api": BSCSCAN_API,
-        "api_key": BSCSCAN_API_KEY,
+        "network": "bsc",  # Para API unificada
+        "enabled": True
+    },
+    "polygon": {
+        "url": "https://api.dexscreener.com/latest/dex/tokens/0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
+        "explorer": "https://polygonscan.com/token/",
+        "chain_id": "polygon",
+        "network": "polygon",  # Para API unificada
+        "enabled": True
+    },
+    "arbitrum": {
+        "url": "https://api.dexscreener.com/latest/dex/tokens/0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+        "explorer": "https://arbiscan.io/token/",
+        "chain_id": "arbitrum",
+        "network": "arbitrum",  # Para API unificada
         "enabled": True
     }
 }
@@ -80,13 +91,11 @@ def check_honeypot_real(chain, token_address):
             is_honeypot = simulation.get("isHoneypot", False)
             buy_tax = simulation.get("buyTax", 0)
             sell_tax = simulation.get("sellTax", 0)
-            transfer_tax = simulation.get("transferTax", 0)
             
             return {
                 "is_honeypot": is_honeypot,
                 "buy_tax": buy_tax,
                 "sell_tax": sell_tax,
-                "transfer_tax": transfer_tax,
                 "risk_level": "CRITICAL" if is_honeypot else "LOW"
             }
         
@@ -95,82 +104,63 @@ def check_honeypot_real(chain, token_address):
     except Exception as e:
         return {"error": str(e)}
 
-def check_rugcheck(chain, token_address):
-    """Verificação com RugCheck API"""
+def check_contract_unified_etherscan(network, token_address):
+    """Análise do contrato usando API UNIFICADA Etherscan"""
     try:
-        url = f"{RUGCHECK_API}/{token_address}"
-        response = requests.get(url, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            return data
-        return {"error": "RugCheck failed"}
-    except:
-        return {"error": "RugCheck error"}
-
-def check_contract_analysis(chain, token_address):
-    """Análise do contrato no Etherscan/Bscscan"""
-    try:
-        if chain == "ethereum":
-            api_url = ETHSCAN_API
-            api_key = ETHERSCAN_API_KEY
-        else:
-            api_url = BSCSCAN_API
-            api_key = BSCSCAN_API_KEY
-        
-        # Verificar se contrato é verified
+        # Parâmetros para API unificada
         params = {
             "module": "contract",
             "action": "getsourcecode",
             "address": token_address,
-            "apikey": api_key
+            "apikey": ETHERSCAN_API_KEY
         }
         
-        response = requests.get(api_url, params=params, timeout=10)
+        # URL específica para cada network (usando API unificada)
+        response = requests.get(ETHERSCAN_UNIFIED_API, params=params, timeout=15)
+        
         if response.status_code == 200:
             data = response.json()
-            if data["result"] and isinstance(data["result"], list):
+            if data.get("status") == "1" and data.get("result"):
                 contract_info = data["result"][0]
+                
                 return {
-                    "verified": contract_info.get("SourceCode") != "",
+                    "verified": contract_info.get("SourceCode") not in ["", None],
                     "proxy": contract_info.get("Proxy") == "1",
-                    "contract_name": contract_info.get("ContractName", "Unknown")
+                    "contract_name": contract_info.get("ContractName", "Unknown"),
+                    "compiler_version": contract_info.get("CompilerVersion", "Unknown"),
+                    "optimization_used": contract_info.get("OptimizationUsed", "0") == "1"
                 }
         
-        return {"error": "Scan API failed"}
+        return {"error": "Etherscan API failed"}
+        
     except Exception as e:
         return {"error": str(e)}
 
-def check_liquidity_lock_real(pair, chain, token_address):
+def check_liquidity_lock_real(pair):
     """Verificação REAL de liquidez travada"""
     try:
-        # 1. Verificar se LP está em DEX confiável
         dex_id = pair.get("dexId", "").lower()
-        reliable_dexs = ["pancakeswap", "uniswap", "raydium"]
-        is_reliable_dex = any(dex in dex_id for dex in reliable_dexs)
+        reliable_dexs = ["pancakeswap", "uniswap", "sushiswap", "raydium"]
         
-        # 2. Verificar liquidez mínima
         liquidity = pair.get("liquidity", {}).get("usd", 0)
-        has_sufficient_liquidity = liquidity > 10000  # $10k mínimo
+        volume_24h = pair.get("volume", {}).get("h24", 0)
         
-        # 3. Verificar se é par com token nativo (mais seguro)
+        # Critérios de segurança
+        is_reliable_dex = any(dex in dex_id for dex in reliable_dexs)
+        has_sufficient_liquidity = liquidity > 5000  # $5k mínimo
+        has_volume = volume_24h > 1000  # $1k volume mínimo
+        
+        # Verificar se é par com token nativo (mais seguro)
         quote_token = pair.get("quoteToken", {}).get("symbol", "").upper()
-        is_native_pair = quote_token in ["WBNB", "BNB", "WETH", "ETH", "SOL"]
-        
-        # 4. Verificar idade do par
-        created_at = pair.get("pairCreatedAt", 0)
-        is_new = False
-        if created_at:
-            created_time = datetime.fromtimestamp(created_at / 1000)
-            age = datetime.now() - created_time
-            is_new = age.days < 3  # Menos de 3 dias
+        is_native_pair = quote_token in ["WBNB", "BNB", "WETH", "ETH", "MATIC", "POL", "ARB", "ETH"]
         
         return {
             "is_reliable_dex": is_reliable_dex,
             "has_sufficient_liquidity": has_sufficient_liquidity,
+            "has_volume": has_volume,
             "is_native_pair": is_native_pair,
-            "is_new_pair": is_new,
             "liquidity_usd": liquidity,
+            "volume_24h": volume_24h,
             "risk_level": "LOW" if (is_reliable_dex and has_sufficient_liquidity) else "MEDIUM"
         }
         
@@ -184,8 +174,9 @@ def get_token_pairs(chain):
         if response.status_code == 200:
             data = response.json()
             pairs = data.get("pairs", [])
+            # Ordenar por volume e pegar os mais relevantes
             pairs.sort(key=lambda x: x.get("volume", {}).get("h24", 0), reverse=True)
-            return pairs[:10]
+            return pairs[:15]  # Limitar para não sobrecarregar
         return []
     except Exception as e:
         logging.error(f"Erro em {chain}: {e}")
@@ -195,29 +186,49 @@ def analyze_token_security(pair, chain):
     """Análise COMPLETA de segurança"""
     base_token = pair.get("baseToken", {})
     token_address = base_token.get("address")
+    network = CHAINS[chain]["network"]
     
     security_report = {
-        "honeypot": check_honeypot_real(chain, token_address),
-        "rugcheck": check_rugcheck(chain, token_address),
-        "contract": check_contract_analysis(chain, token_address),
-        "liquidity": check_liquidity_lock_real(pair, chain, token_address),
+        "honeypot": check_honeypot_real(CHAINS[chain]["chain_id"], token_address),
+        "contract": check_contract_unified_etherscan(network, token_address),
+        "liquidity": check_liquidity_lock_real(pair),
         "overall_risk": "UNKNOWN"
     }
     
     # Determinar risco geral
     risks = []
     
-    if security_report["honeypot"].get("is_honeypot", False):
+    # Verificar honeypot
+    honeypot = security_report["honeypot"]
+    if not honeypot.get("error") and honeypot.get("is_honeypot", False):
         risks.append("CRITICAL")
+    elif honeypot.get("buy_tax", 0) > 20 or honeypot.get("sell_tax", 0) > 20:
+        risks.append("HIGH")
     
-    if security_report["liquidity"].get("risk_level") == "MEDIUM":
+    # Verificar liquidez
+    liquidity = security_report["liquidity"]
+    if not liquidity.get("error"):
+        if not liquidity["is_reliable_dex"]:
+            risks.append("MEDIUM")
+        if not liquidity["has_sufficient_liquidity"]:
+            risks.append("MEDIUM")
+        if not liquidity["is_native_pair"]:
+            risks.append("LOW")
+    
+    # Verificar contrato
+    contract = security_report["contract"]
+    if not contract.get("error") and not contract.get("verified", False):
         risks.append("MEDIUM")
     
-    if not security_report["contract"].get("verified", False):
-        risks.append("MEDIUM")
-    
-    if risks:
-        security_report["overall_risk"] = max(risks)
+    # Determinar risco geral
+    if "CRITICAL" in risks:
+        security_report["overall_risk"] = "CRITICAL"
+    elif "HIGH" in risks:
+        security_report["overall_risk"] = "HIGH"
+    elif "MEDIUM" in risks:
+        security_report["overall_risk"] = "MEDIUM"
+    elif risks:
+        security_report["overall_risk"] = "LOW"
     else:
         security_report["overall_risk"] = "LOW"
     
@@ -236,16 +247,15 @@ def create_security_message(analysis, chain):
     # Honeypot info
     honeypot = security.get('honeypot', {})
     if not honeypot.get('error'):
-        message += f"<b>🤖 Honeypot Check:</b>\n"
-        message += f"• Status: {'🚫 HONEYPOT' if honeypot.get('is_honeypot') else '✅ Limpo'}\n"
+        status = "🚫 HONEYPOT" if honeypot.get('is_honeypot') else "✅ Limpo"
+        message += f"<b>🤖 Honeypot Check:</b> {status}\n"
         message += f"• Taxa Compra: {honeypot.get('buy_tax', 0)}%\n"
         message += f"• Taxa Venda: {honeypot.get('sell_tax', 0)}%\n\n"
     
     # Liquidity info
     liquidity = security.get('liquidity', {})
     if not liquidity.get('error'):
-        message += f"<b>💧 Liquidez:</b>\n"
-        message += f"• Valor: ${liquidity.get('liquidity_usd', 0):,.0f}\n"
+        message += f"<b>💧 Liquidez:</b> ${liquidity.get('liquidity_usd', 0):,.0f}\n"
         message += f"• DEX: {'✅ Confiável' if liquidity.get('is_reliable_dex') else '⚠️ Não confiável'}\n"
         message += f"• Par Nativo: {'✅ Sim' if liquidity.get('is_native_pair') else '⚠️ Não'}\n\n"
     
@@ -254,25 +264,28 @@ def create_security_message(analysis, chain):
     if not contract.get('error'):
         message += f"<b>📝 Contrato:</b>\n"
         message += f"• Verificado: {'✅ Sim' if contract.get('verified') else '⚠️ Não'}\n"
-        message += f"• Nome: {contract.get('contract_name', 'Unknown')}\n"
-        message += f"• Proxy: {'⚠️ Sim' if contract.get('proxy') else '✅ Não'}\n\n"
+        message += f"• Nome: {contract.get('contract_name', 'Unknown')}\n\n"
     
     message += f"<b>🔗 Links:</b>\n"
     message += f"• <a href='{analysis.get('url')}'>DexScreener</a>\n"
     message += f"• <a href='{analysis.get('explorer')}'>Explorer</a>\n"
     
-    if security['overall_risk'] == "CRITICAL":
+    risk_level = security.get('overall_risk', 'UNKNOWN')
+    if risk_level == "CRITICAL":
         message += f"\n\n🚨 <b>ALERTA CRÍTICO: POTENCIAL HONEYPOT!</b>"
-    elif security['overall_risk'] == "MEDIUM":
-        message += f"\n\n⚠️ <b>CUIDADO: Verifique antes de investir!</b>"
+    elif risk_level == "HIGH":
+        message += f"\n\n⚠️ <b>ALTA: Taxas muito altas!</b>"
+    elif risk_level == "MEDIUM":
+        message += f"\n\n⚠️ <b>MEDIO: Verifique antes de investir!</b>"
     else:
-        message += f"\n\n✅ <b>Parece seguro (mas sempre DYOR!)</b>"
+        message += f"\n\n✅ <b>Parece seguro (sempre DYOR!)</b>"
     
     return message
 
 def monitor_tokens_with_security():
     """Monitora tokens com verificações REAIS de segurança"""
     logging.info("🔍 Procurando tokens com verificações de segurança...")
+    tokens_analisados = 0
     
     for chain in CHAINS:
         if not CHAINS[chain]["enabled"]:
@@ -280,6 +293,7 @@ def monitor_tokens_with_security():
             
         try:
             all_pairs = get_token_pairs(chain)
+            logging.info(f"📊 {chain}: {len(all_pairs)} pares encontrados")
             
             for pair in all_pairs:
                 token_address = pair.get("baseToken", {}).get("address")
@@ -302,12 +316,15 @@ def monitor_tokens_with_security():
                     # Enviar relatório de segurança
                     message = create_security_message(analysis, chain)
                     if send_telegram(message):
-                        logging.info(f"✅ {chain}: Relatório de segurança enviado para {analysis['symbol']}")
+                        tokens_analisados += 1
+                        logging.info(f"✅ {chain}: Relatório de segurança para {analysis['symbol']}")
                     
-                    time.sleep(2)  # Respeitar rate limits
+                    time.sleep(3)  # Respeitar rate limits
                     
         except Exception as e:
             logging.error(f"Erro em {chain}: {e}")
+    
+    return tokens_analisados
 
 def main():
     """Função principal"""
@@ -315,15 +332,15 @@ def main():
         logging.error("Configure TELEGRAM_TOKEN e CHAT_ID!")
         return
     
-    logging.info("🤖 Bot de Segurança iniciado!")
+    logging.info("🤖 Bot de Segurança com API Unificada Etherscan iniciado!")
     
-    if send_telegram("🛡️ <b>Bot de Segurança iniciado!</b>\n🔍 Verificando honeypot, liquidez e contratos\n✅ Usando APIs reais de segurança"):
+    if send_telegram("🛡️ <b>Bot de Segurança iniciado!</b>\n🔍 Usando API unificada Etherscan\n✅ Verificando múltiplas chains\n🔄 Suporte: ETH, BSC, Polygon, Arbitrum"):
         logging.info("✅ Conexão com Telegram OK!")
     
     while True:
         try:
-            monitor_tokens_with_security()
-            logging.info("✅ Verificação de segurança completa!")
+            tokens_analisados = monitor_tokens_with_security()
+            logging.info(f"✅ {tokens_analisados} tokens analisados!")
             
             wait_time = random.randint(300, 600)  # 5-10 minutos
             logging.info(f"⏳ Próxima verificação em {wait_time//60} minutos...")
