@@ -16,8 +16,8 @@ TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('CHAT_ID')
 
 # JANELA TEMPORAL AMPLIADA - Perfect for memecoins!
-MAX_AGE_DAYS = 7  # Até 7 dias (168 horas) - Janela ideal para memecoins
-MIN_AGE_HOURS = 2  # Mínimo 2 horas (evita tokens recém-criados)
+MAX_AGE_DAYS = 7  # Até 7 dias (168 horas)
+MIN_AGE_HOURS = 2  # Mínimo 2 horas
 
 # APIs de segurança
 HONEYPOT_CHECK_API = "https://api.honeypot.is/v2/IsHoneypot"
@@ -30,7 +30,7 @@ CHAINS = {
         "chain_id": "eth",
         "native_token": "ETH",
         "enabled": True,
-        "max_age_days": 5  # ETH - 5 dias máximo
+        "max_age_days": 5
     },
     "bsc": {
         "url": "https://api.dexscreener.com/latest/dex/tokens/0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
@@ -38,7 +38,7 @@ CHAINS = {
         "chain_id": "bsc",
         "native_token": "BNB",
         "enabled": True,
-        "max_age_days": 7  # BSC - 7 dias (melhor para memes)
+        "max_age_days": 7
     },
     "solana": {
         "url": "https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112",
@@ -46,7 +46,7 @@ CHAINS = {
         "chain_id": "sol",
         "native_token": "SOL",
         "enabled": True,
-        "max_age_days": 3  # Solana - 3 dias (mais rápido)
+        "max_age_days": 3
     }
 }
 
@@ -80,6 +80,25 @@ def send_telegram(message):
     except Exception as e:
         logging.error(f"Erro Telegram: {e}")
         return False
+
+def get_token_pairs(chain):
+    """Busca pares de um token específico"""
+    try:
+        response = requests.get(CHAINS[chain]["url"], timeout=15)
+        if response.status_code == 200:
+            data = response.json()
+            pairs = data.get("pairs", [])
+            
+            # Ordenar por volume (mais populares primeiro)
+            pairs.sort(key=lambda x: x.get("volume", {}).get("h24", 0), reverse=True)
+            
+            logging.info(f"✅ {chain}: {len(pairs)} pares encontrados")
+            return pairs[:20]
+            
+        return []
+    except Exception as e:
+        logging.error(f"❌ Erro em {chain}: {e}")
+        return []
 
 def check_honeypot(chain, token_address):
     """Verifica se é honeypot"""
@@ -116,7 +135,6 @@ def filter_recent_tokens(pairs, chain):
         try:
             created_at = pair.get("pairCreatedAt")
             if not created_at:
-                # Inclui tokens sem data (mais conservador)
                 recent_tokens.append(pair)
                 continue
                 
@@ -124,7 +142,6 @@ def filter_recent_tokens(pairs, chain):
             age = datetime.now() - created_time
             age_hours = age.total_seconds() / 3600
             
-            # JANELA AMPLIADA: 2 horas até X dias
             if MIN_AGE_HOURS <= age_hours <= max_age_hours:
                 recent_tokens.append(pair)
                 
@@ -162,7 +179,7 @@ def analyze_token(pair, chain):
     elif "✅" in honeypot_status:
         security_score += 2
     
-    # 2. Verificar taxas (apenas EVM)
+    # 2. Verificar taxas
     if chain in ["ethereum", "bsc"]:
         if buy_tax > 15 or sell_tax > 15:
             security_checks.append(f"⚠️ Taxas altas (C: {buy_tax}%, V: {sell_tax}%)")
@@ -180,7 +197,7 @@ def analyze_token(pair, chain):
         security_checks.append(f"⚠️ DEX: {dex_id}")
         security_score -= 1
     
-    # 4. Verificar idade do contrato (JANELA AMPLIADA)
+    # 4. Verificar idade do contrato
     age_hours = 999
     age_days = 0
     if created_at:
@@ -192,15 +209,15 @@ def analyze_token(pair, chain):
         except:
             age_hours = 999
     
-    # SCORE POR IDADE (Otimo para memecoins)
+    # SCORE POR IDADE
     age_score = 0
-    if age_hours < 24:  # Menos de 1 dia
+    if age_hours < 24:
         age_score = 3
         age_str = f"🆕 {age_hours:.1f}h"
-    elif age_hours < 72:  # 1-3 dias
+    elif age_hours < 72:
         age_score = 2
         age_str = f"🔥 {age_days:.1f}d"
-    elif age_hours < 168:  # 3-7 dias
+    elif age_hours < 168:
         age_score = 1
         age_str = f"⏰ {age_days:.1f}d"
     else:
@@ -209,11 +226,11 @@ def analyze_token(pair, chain):
     security_checks.append(age_str)
     security_score += age_score
     
-    # 📈 ANÁLISE DE MERCADO (Foco em memecoins)
+    # 📈 ANÁLISE DE MERCADO
     score = 0
     details = []
     
-    # 1. VOLUME (Critério mais importante para memes)
+    # 1. VOLUME 
     volume_score = 0
     if volume_24h > 100000:
         volume_score = 3
@@ -229,7 +246,7 @@ def analyze_token(pair, chain):
     
     score += volume_score
     
-    # 2. LIQUIDEZ (Importante mas menos que volume para memes)
+    # 2. LIQUIDEZ
     liquidity_score = 0
     if liquidity > 50000:
         liquidity_score = 2
@@ -242,7 +259,7 @@ def analyze_token(pair, chain):
     
     score += liquidity_score
     
-    # 3. PRICE CHANGE (Muito importante para memes)
+    # 3. PRICE CHANGE
     price_score = 0
     if price_change_24h > 50:
         price_score = 3
@@ -263,7 +280,7 @@ def analyze_token(pair, chain):
     
     # 4. BÔNUS PARA MEMECOINS
     bonus_score = 0
-    if volume_6h > volume_24h * 0.5:  # Volume concentrado nas últimas 6h
+    if volume_6h > volume_24h * 0.5:
         bonus_score += 1
         details.append("⚡ Volume recente")
     
@@ -354,7 +371,6 @@ def monitor_tokens():
             if not all_pairs:
                 continue
             
-            # Filtrar com JANELA AMPLIADA
             recent_pairs = filter_recent_tokens(all_pairs, chain)
             logging.info(f"📊 {chain}: {len(recent_pairs)} tokens (até {CHAINS[chain]['max_age_days']} dias)")
             
@@ -366,8 +382,7 @@ def monitor_tokens():
                     
                     analysis = analyze_token(pair, chain)
                     
-                    # Notificar tokens com score decente
-                    if analysis["score"] >= 4:  # Score mais baixo para pegar mais memes
+                    if analysis["score"] >= 4:
                         message = create_message(analysis, chain)
                         if send_telegram(message):
                             tokens_encontrados += 1
