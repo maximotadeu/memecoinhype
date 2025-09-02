@@ -15,61 +15,35 @@ logging.basicConfig(
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('CHAT_ID')
 
-# JANELA TEMPORAL BEM AMPLIADA
-MAX_AGE_DAYS = 14  # Até 14 dias! 
-MIN_AGE_HOURS = 1   # Apenas 1 hora mínimo
+# APIs de segurança REAIS
+HONEYPOT_API = "https://api.honeypot.is/v2/IsHoneypot"
+RUGCHECK_API = "https://api.rugcheck.xyz/tokens"
+BSCSCAN_API = "https://api.bscscan.com/api"
+ETHSCAN_API = "https://api.etherscan.io/api"
 
-# APIs de segurança
-HONEYPOT_CHECK_API = "https://api.honeypot.is/v2/IsHoneypot"
+# Suas API Keys (adicionar depois no Render)
+BSCSCAN_API_KEY = os.environ.get('BSCSCAN_API_KEY', 'YourApiKeyToken')
+ETHERSCAN_API_KEY = os.environ.get('ETHERSCAN_API_KEY', 'YourApiKeyToken')
 
-# Chains suportadas - MAIS URLs para pegar mais tokens
 CHAINS = {
     "ethereum": {
-        "urls": [
-            "https://api.dexscreener.com/latest/dex/tokens/0x2170ed0880ac9a755fd29b2688956bd959f933f8",  # ETH
-            "https://api.dexscreener.com/latest/dex/tokens/0xdac17f958d2ee523a2206206994597c13d831ec7",  # USDT
-            "https://api.dexscreener.com/latest/dex/tokens/0x2260fac5e5542a773aa44fbcfedf7c193bc2c599"   # WBTC
-        ],
+        "url": "https://api.dexscreener.com/latest/dex/tokens/0x2170ed0880ac9a755fd29b2688956bd959f933f8",
         "explorer": "https://etherscan.io/token/",
         "chain_id": "eth",
-        "native_token": "ETH",
-        "enabled": True,
-        "max_age_days": 10
+        "scan_api": ETHSCAN_API,
+        "api_key": ETHERSCAN_API_KEY,
+        "enabled": True
     },
     "bsc": {
-        "urls": [
-            "https://api.dexscreener.com/latest/dex/tokens/0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",  # BNB
-            "https://api.dexscreener.com/latest/dex/tokens/0x55d398326f99059ff775485246999027b3197955",  # BUSD
-            "https://api.dexscreener.com/latest/dex/tokens/0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"   # USDC
-        ],
+        "url": "https://api.dexscreener.com/latest/dex/tokens/0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
         "explorer": "https://bscscan.com/token/", 
         "chain_id": "bsc",
-        "native_token": "BNB",
-        "enabled": True,
-        "max_age_days": 14  # BSC tem mais memecoins
-    },
-    "solana": {
-        "urls": [
-            "https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112",  # SOL
-            "https://api.dexscreener.com/latest/dex/tokens/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",  # USDC
-            "https://api.dexscreener.com/latest/dex/tokens/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"   # USDT
-        ],
-        "explorer": "https://solscan.io/token/",
-        "chain_id": "sol",
-        "native_token": "SOL",
-        "enabled": True,
-        "max_age_days": 7
+        "scan_api": BSCSCAN_API,
+        "api_key": BSCSCAN_API_KEY,
+        "enabled": True
     }
 }
 
-# DEXs confiáveis - MAIS opções
-RELIABLE_DEXS = {
-    "ethereum": ["uniswap", "sushiswap", "shibaswap", "pancakeswap"],
-    "bsc": ["pancakeswap", "biswap", "apeswap", "babyswap", "julswap"],
-    "solana": ["raydium", "orca", "jupiter", "meteora", "aldrin"]
-}
-
-# Para armazenar tokens já vistos
 vistos = set()
 
 def send_telegram(message):
@@ -93,44 +67,11 @@ def send_telegram(message):
         logging.error(f"Erro Telegram: {e}")
         return False
 
-def get_token_pairs(chain):
-    """Busca pares de MÚLTIPLOS tokens para pegar mais dados"""
-    all_pairs = []
-    
-    for url in CHAINS[chain]["urls"]:
-        try:
-            response = requests.get(url, timeout=15)
-            if response.status_code == 200:
-                data = response.json()
-                pairs = data.get("pairs", [])
-                
-                # Ordenar por volume (mais populares primeiro)
-                pairs.sort(key=lambda x: x.get("volume", {}).get("h24", 0), reverse=True)
-                all_pairs.extend(pairs[:15])  # Pegar os 15 de cada token
-                
-                logging.info(f"✅ {chain}: {len(pairs)} pares de {url.split('/')[-1]}")
-                
-        except Exception as e:
-            logging.error(f"❌ Erro em {chain} - {url}: {e}")
-    
-    # Remover duplicatas
-    unique_pairs = {}
-    for pair in all_pairs:
-        pair_address = pair.get("pairAddress")
-        if pair_address:
-            unique_pairs[pair_address] = pair
-    
-    logging.info(f"📊 {chain}: {len(unique_pairs)} pares únicos encontrados")
-    return list(unique_pairs.values())
-
-def check_honeypot(chain, token_address):
-    """Verifica se é honeypot - MAIS PERMISSIVO"""
-    if chain not in ["eth", "bsc"]:
-        return True, 0, 0, "🔓 Rede não suportada"
-    
+def check_honeypot_real(chain, token_address):
+    """Verificação REAL de honeypot"""
     try:
-        url = f"{HONEYPOT_CHECK_API}?chain={chain}&token={token_address}"
-        response = requests.get(url, timeout=10)  # Timeout menor
+        url = f"{HONEYPOT_API}?chain={chain}&token={token_address}"
+        response = requests.get(url, timeout=15)
         
         if response.status_code == 200:
             data = response.json()
@@ -139,216 +80,199 @@ def check_honeypot(chain, token_address):
             is_honeypot = simulation.get("isHoneypot", False)
             buy_tax = simulation.get("buyTax", 0)
             sell_tax = simulation.get("sellTax", 0)
+            transfer_tax = simulation.get("transferTax", 0)
             
-            # MAIS PERMISSIVO: Só alerta se for honeypot confirmado
-            if is_honeypot:
-                return False, buy_tax, sell_tax, "🚫 HONEYPOT"
-            else:
-                return True, buy_tax, sell_tax, "✅ Provavelmente seguro"
+            return {
+                "is_honeypot": is_honeypot,
+                "buy_tax": buy_tax,
+                "sell_tax": sell_tax,
+                "transfer_tax": transfer_tax,
+                "risk_level": "CRITICAL" if is_honeypot else "LOW"
+            }
         
-        return True, 0, 0, "⚠️ API indisponível"
+        return {"error": "API unavailable"}
         
     except Exception as e:
-        # Em caso de erro, assume seguro
-        return True, 0, 0, "⚠️ Erro na verificação"
+        return {"error": str(e)}
 
-def filter_recent_tokens(pairs, chain):
-    """Filtra tokens com janela temporal BEM AMPLIADA"""
-    recent_tokens = []
-    max_age_hours = CHAINS[chain].get("max_age_days", 14) * 24
-    
-    for pair in pairs:
-        try:
-            created_at = pair.get("pairCreatedAt")
-            if not created_at:
-                # Inclui TODOS os tokens sem data
-                recent_tokens.append(pair)
-                continue
-                
-            created_time = datetime.fromtimestamp(created_at / 1000)
-            age = datetime.now() - created_time
-            age_hours = age.total_seconds() / 3600
-            
-            # JANELA MUITO AMPLIADA: 1 hora até 14 dias
-            if MIN_AGE_HOURS <= age_hours <= max_age_hours:
-                recent_tokens.append(pair)
-                
-        except Exception as e:
-            # Inclui mesmo com erro
-            recent_tokens.append(pair)
-    
-    return recent_tokens
+def check_rugcheck(chain, token_address):
+    """Verificação com RugCheck API"""
+    try:
+        url = f"{RUGCHECK_API}/{token_address}"
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return data
+        return {"error": "RugCheck failed"}
+    except:
+        return {"error": "RugCheck error"}
 
-def analyze_token(pair, chain):
-    """Analisa um token com regras MUITO RELAXADAS"""
-    base_token = pair.get("baseToken", {})
-    
-    token_address = base_token.get("address")
-    token_name = base_token.get("name", "Unknown")[:25] or "Unknown"
-    token_symbol = base_token.get("symbol", "UNKNOWN") or "UNKNOWN"
-    
-    liquidity = pair.get("liquidity", {}).get("usd", 0) or 0
-    volume_24h = pair.get("volume", {}).get("h24", 0) or 0
-    price = pair.get("priceUsd", "0") or "0"
-    price_change_24h = pair.get("priceChange", {}).get("h24", 0) or 0
-    created_at = pair.get("pairCreatedAt", 0)
-    dex_id = pair.get("dexId", "Unknown").lower()
-    
-    # 🔒 VERIFICAÇÕES DE SEGURANÇA (MUITO RELAXADAS)
-    security_checks = []
-    security_score = 2  # Score base positivo
-    
-    # 1. Verificar Honeypot (mais permissivo)
-    is_safe, buy_tax, sell_tax, honeypot_status = check_honeypot(CHAINS[chain]["chain_id"], token_address)
-    security_checks.append(honeypot_status)
-    
-    if "HONEYPOT" in honeypot_status:
-        security_score = -10  # Só penaliza se for honeypot confirmado
-    else:
-        security_score += 1
-    
-    # 2. Verificar taxas (bem relaxado)
-    if chain in ["ethereum", "bsc"]:
-        if buy_tax > 25 or sell_tax > 25:  # Limite bem alto
-            security_checks.append(f"⚠️ Taxas altas (C: {buy_tax}%, V: {sell_tax}%)")
-            security_score -= 1
+def check_contract_analysis(chain, token_address):
+    """Análise do contrato no Etherscan/Bscscan"""
+    try:
+        if chain == "ethereum":
+            api_url = ETHSCAN_API
+            api_key = ETHERSCAN_API_KEY
         else:
-            security_checks.append(f"✅ Taxas OK (C: {buy_tax}%, V: {sell_tax}%)")
-            security_score += 1
-    
-    # 3. Verificar DEX (aceita quase todos)
-    is_reliable_dex = any(dex in dex_id for dex in RELIABLE_DEXS.get(chain, []))
-    if is_reliable_dex:
-        security_checks.append(f"✅ {dex_id.capitalize()}")
-        security_score += 1
-    else:
-        security_checks.append(f"ℹ️ DEX: {dex_id}")
-        # Não penaliza DEX não confiável
-    
-    # 4. Verificar idade (muito relaxado)
-    age_hours = 999
-    age_days = 0
-    if created_at:
-        try:
+            api_url = BSCSCAN_API
+            api_key = BSCSCAN_API_KEY
+        
+        # Verificar se contrato é verified
+        params = {
+            "module": "contract",
+            "action": "getsourcecode",
+            "address": token_address,
+            "apikey": api_key
+        }
+        
+        response = requests.get(api_url, params=params, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if data["result"] and isinstance(data["result"], list):
+                contract_info = data["result"][0]
+                return {
+                    "verified": contract_info.get("SourceCode") != "",
+                    "proxy": contract_info.get("Proxy") == "1",
+                    "contract_name": contract_info.get("ContractName", "Unknown")
+                }
+        
+        return {"error": "Scan API failed"}
+    except Exception as e:
+        return {"error": str(e)}
+
+def check_liquidity_lock_real(pair, chain, token_address):
+    """Verificação REAL de liquidez travada"""
+    try:
+        # 1. Verificar se LP está em DEX confiável
+        dex_id = pair.get("dexId", "").lower()
+        reliable_dexs = ["pancakeswap", "uniswap", "raydium"]
+        is_reliable_dex = any(dex in dex_id for dex in reliable_dexs)
+        
+        # 2. Verificar liquidez mínima
+        liquidity = pair.get("liquidity", {}).get("usd", 0)
+        has_sufficient_liquidity = liquidity > 10000  # $10k mínimo
+        
+        # 3. Verificar se é par com token nativo (mais seguro)
+        quote_token = pair.get("quoteToken", {}).get("symbol", "").upper()
+        is_native_pair = quote_token in ["WBNB", "BNB", "WETH", "ETH", "SOL"]
+        
+        # 4. Verificar idade do par
+        created_at = pair.get("pairCreatedAt", 0)
+        is_new = False
+        if created_at:
             created_time = datetime.fromtimestamp(created_at / 1000)
             age = datetime.now() - created_time
-            age_hours = age.total_seconds() / 3600
-            age_days = age_hours / 24
-        except:
-            age_hours = 999
-    
-    age_str = f"📅 {age_days:.1f}d" if age_days >= 1 else f"🆕 {age_hours:.1f}h"
-    security_checks.append(age_str)
-    
-    # 📈 ANÁLISE DE MERCADO (MUITO RELAXADA)
-    score = 0
-    details = []
-    
-    # 1. VOLUME (critério bem baixo)
-    if volume_24h > 10000:
-        score += 2
-        details.append(f"📈 Volume: ${volume_24h:,.0f}")
-    elif volume_24h > 5000:
-        score += 1
-        details.append(f"📊 Volume: ${volume_24h:,.0f}")
-    elif volume_24h > 1000:
-        score += 0.5
-        details.append(f"📉 Volume: ${volume_24h:,.0f}")
-    else:
-        details.append(f"💤 Volume: ${volume_24h:,.0f}")
-    
-    # 2. LIQUIDEZ (critério bem baixo)
-    if liquidity > 10000:
-        score += 2
-        details.append(f"💰 Liquidez: ${liquidity:,.0f}")
-    elif liquidity > 5000:
-        score += 1
-        details.append(f"💧 Liquidez: ${liquidity:,.0f}")
-    elif liquidity > 1000:
-        score += 0.5
-        details.append(f"💦 Liquidez: ${liquidity:,.0f}")
-    else:
-        details.append(f"🌵 Liquidez: ${liquidity:,.0f}")
-    
-    # 3. PRICE CHANGE (qualquer positivo ganha pontos)
-    if price_change_24h > 10:
-        score += 2
-        details.append(f"🚀 +{price_change_24h:.1f}%")
-    elif price_change_24h > 0:
-        score += 1
-        details.append(f"📈 +{price_change_24h:.1f}%")
-    elif price_change_24h > -10:
-        score += 0.5
-        details.append(f"➡️ {price_change_24h:.1f}%")
-    else:
-        details.append(f"📉 {price_change_24h:.1f}%")
-    
-    # 4. BÔNUS (qualquer coisa ganha pontos)
-    score += 1  # Bônus base para todos
-    
-    if any(x in token_name.lower() for x in ['dog', 'cat', 'ape', 'moon', 'coin', 'token', 'kitty', 'baby']):
-        score += 1
-        details.append("🎯 Nome de meme")
-    
-    if any(x in dex_id for x in ['raydium', 'pancake', 'uniswap']):
-        score += 1
-        details.append("🏆 DEX popular")
-    
-    # Score total MUITO relaxado
-    total_score = score + security_score
-    
-    return {
-        "address": token_address,
-        "name": token_name,
-        "symbol": token_symbol,
-        "price": price,
-        "liquidity": liquidity,
-        "volume_24h": volume_24h,
-        "price_change_24h": price_change_24h,
-        "age_hours": age_hours,
-        "age_days": age_days,
-        "score": total_score,
-        "security_score": security_score,
-        "details": details,
-        "security_checks": security_checks,
-        "is_safe": security_score > -5,  # Muito permissivo
-        "url": pair.get("url", ""),
-        "dex": dex_id,
-        "explorer": f"{CHAINS[chain]['explorer']}{token_address}",
-        "chain": chain
-    }
+            is_new = age.days < 3  # Menos de 3 dias
+        
+        return {
+            "is_reliable_dex": is_reliable_dex,
+            "has_sufficient_liquidity": has_sufficient_liquidity,
+            "is_native_pair": is_native_pair,
+            "is_new_pair": is_new,
+            "liquidity_usd": liquidity,
+            "risk_level": "LOW" if (is_reliable_dex and has_sufficient_liquidity) else "MEDIUM"
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
 
-def create_message(analysis, chain):
-    """Cria mensagem MUITO simples"""
-    chain_display = chain.upper()
+def get_token_pairs(chain):
+    """Busca pares de tokens"""
+    try:
+        response = requests.get(CHAINS[chain]["url"], timeout=15)
+        if response.status_code == 200:
+            data = response.json()
+            pairs = data.get("pairs", [])
+            pairs.sort(key=lambda x: x.get("volume", {}).get("h24", 0), reverse=True)
+            return pairs[:10]
+        return []
+    except Exception as e:
+        logging.error(f"Erro em {chain}: {e}")
+        return []
+
+def analyze_token_security(pair, chain):
+    """Análise COMPLETA de segurança"""
+    base_token = pair.get("baseToken", {})
+    token_address = base_token.get("address")
     
-    emoji = "🚀" if analysis["score"] > 5 else "⭐" if analysis["score"] > 3 else "🔍"
-    message = f"{emoji} <b>{chain_display} MEME</b>\n\n"
+    security_report = {
+        "honeypot": check_honeypot_real(chain, token_address),
+        "rugcheck": check_rugcheck(chain, token_address),
+        "contract": check_contract_analysis(chain, token_address),
+        "liquidity": check_liquidity_lock_real(pair, chain, token_address),
+        "overall_risk": "UNKNOWN"
+    }
     
-    message += f"<b>{analysis['name']} ({analysis['symbol']})</b>\n"
-    message += f"💵 <b>Preço:</b> ${analysis['price']}\n"
-    message += f"📊 <b>Volume:</b> ${analysis['volume_24h']:,.0f}\n"
-    message += f"📈 <b>Variação:</b> {analysis['price_change_24h']:.1f}%\n"
-    message += f"⭐ <b>Score:</b> {analysis['score']:.1f}/10\n\n"
+    # Determinar risco geral
+    risks = []
     
-    message += "<b>📊 Info:</b>\n"
-    for detail in analysis["details"][:3]:  # Apenas 3 detalhes
-        message += f"• {detail}\n"
+    if security_report["honeypot"].get("is_honeypot", False):
+        risks.append("CRITICAL")
     
-    message += f"\n<b>🔗 Links:</b>\n"
-    message += f"• <a href='{analysis['url']}'>DexScreener</a>\n"
-    message += f"• <a href='{analysis['explorer']}'>Explorer</a>\n"
-    message += f"• <b>DEX:</b> {analysis['dex']}"
+    if security_report["liquidity"].get("risk_level") == "MEDIUM":
+        risks.append("MEDIUM")
     
-    if analysis["score"] > 6:
-        message += f"\n\n🎯 <b>POTENCIAL!</b>"
+    if not security_report["contract"].get("verified", False):
+        risks.append("MEDIUM")
+    
+    if risks:
+        security_report["overall_risk"] = max(risks)
+    else:
+        security_report["overall_risk"] = "LOW"
+    
+    return security_report
+
+def create_security_message(analysis, chain):
+    """Cria mensagem detalhada de segurança"""
+    token_name = analysis.get("name", "Unknown")
+    token_symbol = analysis.get("symbol", "UNKNOWN")
+    security = analysis.get("security", {})
+    
+    message = f"🛡️ <b>RELATÓRIO DE SEGURANÇA - {chain.upper()}</b>\n\n"
+    message += f"<b>{token_name} ({token_symbol})</b>\n"
+    message += f"🔒 <b>Risco Geral:</b> {security.get('overall_risk', 'UNKNOWN')}\n\n"
+    
+    # Honeypot info
+    honeypot = security.get('honeypot', {})
+    if not honeypot.get('error'):
+        message += f"<b>🤖 Honeypot Check:</b>\n"
+        message += f"• Status: {'🚫 HONEYPOT' if honeypot.get('is_honeypot') else '✅ Limpo'}\n"
+        message += f"• Taxa Compra: {honeypot.get('buy_tax', 0)}%\n"
+        message += f"• Taxa Venda: {honeypot.get('sell_tax', 0)}%\n\n"
+    
+    # Liquidity info
+    liquidity = security.get('liquidity', {})
+    if not liquidity.get('error'):
+        message += f"<b>💧 Liquidez:</b>\n"
+        message += f"• Valor: ${liquidity.get('liquidity_usd', 0):,.0f}\n"
+        message += f"• DEX: {'✅ Confiável' if liquidity.get('is_reliable_dex') else '⚠️ Não confiável'}\n"
+        message += f"• Par Nativo: {'✅ Sim' if liquidity.get('is_native_pair') else '⚠️ Não'}\n\n"
+    
+    # Contract info
+    contract = security.get('contract', {})
+    if not contract.get('error'):
+        message += f"<b>📝 Contrato:</b>\n"
+        message += f"• Verificado: {'✅ Sim' if contract.get('verified') else '⚠️ Não'}\n"
+        message += f"• Nome: {contract.get('contract_name', 'Unknown')}\n"
+        message += f"• Proxy: {'⚠️ Sim' if contract.get('proxy') else '✅ Não'}\n\n"
+    
+    message += f"<b>🔗 Links:</b>\n"
+    message += f"• <a href='{analysis.get('url')}'>DexScreener</a>\n"
+    message += f"• <a href='{analysis.get('explorer')}'>Explorer</a>\n"
+    
+    if security['overall_risk'] == "CRITICAL":
+        message += f"\n\n🚨 <b>ALERTA CRÍTICO: POTENCIAL HONEYPOT!</b>"
+    elif security['overall_risk'] == "MEDIUM":
+        message += f"\n\n⚠️ <b>CUIDADO: Verifique antes de investir!</b>"
+    else:
+        message += f"\n\n✅ <b>Parece seguro (mas sempre DYOR!)</b>"
     
     return message
 
-def monitor_tokens():
-    """Monitora tokens com regras MUITO RELAXADAS"""
-    logging.info("🔍 Procurando memecoins (regras relaxadas)...")
-    tokens_encontrados = 0
+def monitor_tokens_with_security():
+    """Monitora tokens com verificações REAIS de segurança"""
+    logging.info("🔍 Procurando tokens com verificações de segurança...")
     
     for chain in CHAINS:
         if not CHAINS[chain]["enabled"]:
@@ -357,32 +281,33 @@ def monitor_tokens():
         try:
             all_pairs = get_token_pairs(chain)
             
-            if not all_pairs:
-                continue
-            
-            recent_pairs = filter_recent_tokens(all_pairs, chain)
-            logging.info(f"📊 {chain}: {len(recent_pairs)} tokens (até {CHAINS[chain]['max_age_days']} dias)")
-            
-            for pair in recent_pairs:
+            for pair in all_pairs:
                 token_address = pair.get("baseToken", {}).get("address")
                 
                 if token_address and token_address not in vistos:
                     vistos.add(token_address)
                     
-                    analysis = analyze_token(pair, chain)
+                    # Análise COMPLETA de segurança
+                    security_report = analyze_token_security(pair, chain)
                     
-                    # NOTIFICA QUASE TUDO - Score muito baixo
-                    if analysis["score"] >= 1:  # Quase qualquer token
-                        message = create_message(analysis, chain)
-                        if send_telegram(message):
-                            tokens_encontrados += 1
-                            logging.info(f"✅ {chain}: {analysis['symbol']} (Score: {analysis['score']:.1f})")
-                        time.sleep(0.5)  # Delay bem curto
+                    # Adicionar informações básicas
+                    analysis = {
+                        "name": pair.get("baseToken", {}).get("name", "Unknown"),
+                        "symbol": pair.get("baseToken", {}).get("symbol", "UNKNOWN"),
+                        "url": pair.get("url", ""),
+                        "explorer": f"{CHAINS[chain]['explorer']}{token_address}",
+                        "security": security_report
+                    }
+                    
+                    # Enviar relatório de segurança
+                    message = create_security_message(analysis, chain)
+                    if send_telegram(message):
+                        logging.info(f"✅ {chain}: Relatório de segurança enviado para {analysis['symbol']}")
+                    
+                    time.sleep(2)  # Respeitar rate limits
                     
         except Exception as e:
             logging.error(f"Erro em {chain}: {e}")
-    
-    return tokens_encontrados
 
 def main():
     """Função principal"""
@@ -390,23 +315,23 @@ def main():
         logging.error("Configure TELEGRAM_TOKEN e CHAT_ID!")
         return
     
-    logging.info(f"🤖 Bot Memecoin Hunter (RELAXADO) iniciado!")
+    logging.info("🤖 Bot de Segurança iniciado!")
     
-    if send_telegram(f"🤖 <b>Memecoin Hunter RELAXADO iniciado!</b>\n🔍 Janela: até 14 dias\n🎯 Notificando quase todos os tokens\n🛡️ Verificações leves"):
+    if send_telegram("🛡️ <b>Bot de Segurança iniciado!</b>\n🔍 Verificando honeypot, liquidez e contratos\n✅ Usando APIs reais de segurança"):
         logging.info("✅ Conexão com Telegram OK!")
     
     while True:
         try:
-            tokens_encontrados = monitor_tokens()
-            logging.info(f"🎉 {tokens_encontrados} tokens notificados!")
+            monitor_tokens_with_security()
+            logging.info("✅ Verificação de segurança completa!")
             
-            wait_time = random.randint(180, 300)  # 3-5 minutos
+            wait_time = random.randint(300, 600)  # 5-10 minutos
             logging.info(f"⏳ Próxima verificação em {wait_time//60} minutos...")
             time.sleep(wait_time)
             
         except Exception as e:
             logging.error(f"Erro no loop: {e}")
-            time.sleep(30)
+            time.sleep(60)
 
 if __name__ == "__main__":
     main()
