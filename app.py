@@ -35,11 +35,19 @@ def send_telegram(msg):
         logging.error(f"Erro ao enviar mensagem Telegram: {e}")
 
 def get_new_pairs(chain):
-    url = f"https://api.dexscreener.com/latest/dex/pairs/{chain}"
+    # URL corrigida do DexScreener
+    if chain == "ethereum":
+        url = "https://api.dexscreener.com/latest/dex/tokens/0x2170ed0880ac9a755fd29b2688956bd959f933f8"  # ETH
+    elif chain == "bsc":
+        url = "https://api.dexscreener.com/latest/dex/tokens/0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"  # BNB
+    else:
+        return []
+    
     try:
         response = requests.get(url, timeout=15)
         response.raise_for_status()
-        return response.json().get("pairs", [])
+        data = response.json()
+        return data.get("pairs", [])
     except Exception as e:
         logging.error(f"Erro Dex {chain}: {e}")
         return []
@@ -146,7 +154,7 @@ def main():
         logging.info("JobQueue configurado com sucesso!")
     else:
         logging.warning("JobQueue não disponível. Usando fallback...")
-        # Fallback: verificar tokens uma vez e depois sair
+        # Fallback: verificar tokens uma vez
         check_tokens()
         return
     
