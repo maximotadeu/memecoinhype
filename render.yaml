@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: telegram-token-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: TELEGRAM_TOKEN
+        fromSecret: true
+      - key: CHAT_ID
+        fromSecret: true
