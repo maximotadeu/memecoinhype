@@ -1,10 +1,10 @@
 services:
   - type: web
-    name: telegram-token-bot
+    name: telegram-token-monitor
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py  # ou app.py dependendo do seu arquivo
+    startCommand: python bot.py
     envVars:
       - key: TELEGRAM_TOKEN
         fromSecret: true
