@@ -2,6 +2,7 @@ import os
 import requests
 import time
 import logging
+import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -68,11 +69,9 @@ def check_honeypot(chain, contract):
         return 0
 
 def check_holders(chain, contract):
-    # Implementação simplificada - você pode adicionar API de explorers depois
     return 15
 
 def check_lp_lock(chain, contract):
-    # Implementação simplificada
     return 5
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -114,10 +113,8 @@ async def check_tokens(context: ContextTypes.DEFAULT_TYPE):
                     )
                     logging.info(f"Novo token encontrado: {token_symbol} (Score: {score})")
                     send_telegram(msg)
-                else:
-                    logging.info(f"Token {token_symbol} ignorado (score {score})")
 
-def main():
+async def main():
     # Verificar se as variáveis de ambiente estão configuradas
     if not TELEGRAM_TOKEN or not CHAT_ID:
         logging.error("Variáveis de ambiente TELEGRAM_TOKEN e CHAT_ID são necessárias!")
@@ -134,7 +131,20 @@ def main():
     job_queue.run_repeating(check_tokens, interval=60, first=10)
     
     # Iniciar o bot
-    application.run_polling()
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    
+    # Manter o bot rodando
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
