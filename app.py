@@ -15,28 +15,17 @@ logging.basicConfig(
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('CHAT_ID')
 
-# Chains que funcionam com a API DexScreener
+# URLs corretas da API DexScreener (versão mais recente)
 CHAINS = {
     "ethereum": {
-        "url": "https://api.dexscreener.com/latest/dex/pairs/ethereum",
+        "url": "https://api.dexscreener.com/latest/dex/networks/ethereum/pairs",
         "explorer": "https://etherscan.io/token/",
         "enabled": True
     },
     "bsc": {
-        "url": "https://api.dexscreener.com/latest/dex/pairs/bsc", 
+        "url": "https://api.dexscreener.com/latest/dex/networks/bsc/pairs", 
         "explorer": "https://bscscan.com/token/",
         "enabled": True
-    },
-    # Removendo chains que não funcionam
-    "polygon": {
-        "url": "https://api.dexscreener.com/latest/dex/pairs/polygon",
-        "explorer": "https://polygonscan.com/token/", 
-        "enabled": False  # Desabilitada
-    },
-    "arbitrum": {
-        "url": "https://api.dexscreener.com/latest/dex/pairs/arbitrum",
-        "explorer": "https://arbiscan.io/token/",
-        "enabled": False  # Desabilitada
     }
 }
 
@@ -59,13 +48,17 @@ def send_telegram(message):
     
     try:
         response = requests.post(url, json=payload, timeout=10)
-        return response.status_code == 200
+        if response.status_code == 200:
+            return True
+        else:
+            logging.error(f"Erro Telegram {response.status_code}: {response.text}")
+            return False
     except Exception as e:
         logging.error(f"Erro Telegram: {e}")
         return False
 
 def get_all_pairs(chain):
-    """Busca todos os pares de uma chain"""
+    """Busca todos os pares de uma chain usando API correta"""
     if not CHAINS[chain]["enabled"]:
         return []
     
@@ -73,11 +66,13 @@ def get_all_pairs(chain):
         response = requests.get(CHAINS[chain]["url"], timeout=15)
         if response.status_code == 200:
             data = response.json()
+            # A nova API retorna a lista diretamente
             pairs = data.get("pairs", [])
             logging.info(f"✅ {chain}: {len(pairs)} pares encontrados")
             return pairs
         else:
             logging.error(f"❌ {chain}: API retornou {response.status_code}")
+            logging.error(f"URL: {CHAINS[chain]['url']}")
             return []
     except Exception as e:
         logging.error(f"❌ Erro em {chain}: {e}")
@@ -102,7 +97,7 @@ def filter_recent_tokens(pairs, max_hours=6):
                 recent_tokens.append(pair)
                 
         except Exception as e:
-            logging.error(f"Erro ao processar par: {e}")
+            continue  # Ignorar erros individuais
     
     return recent_tokens
 
@@ -111,7 +106,7 @@ def analyze_token(pair, chain):
     base_token = pair.get("baseToken", {})
     
     token_address = base_token.get("address")
-    token_name = base_token.get("name", "Unknown")[:30]  # Limitar tamanho
+    token_name = base_token.get("name", "Unknown")[:30]
     token_symbol = base_token.get("symbol", "UNKNOWN")
     
     liquidity = pair.get("liquidity", {}).get("usd", 0)
@@ -148,8 +143,6 @@ def analyze_token(pair, chain):
     elif age_hours < 6:
         score += 1
         details.append(f"📅 {age_str}")
-    else:
-        details.append(f"⏳ {age_str}")
     
     # Liquidez
     if liquidity > 50000:
@@ -253,7 +246,13 @@ def main():
         return
     
     logging.info("🤖 Bot iniciado! Monitorando tokens...")
-    send_telegram("🤖 <b>Bot iniciado!</b>\n🔍 Monitorando tokens novos...")
+    
+    # Testar conexão com Telegram
+    if send_telegram("🤖 <b>Bot iniciado!</b>\n🔍 Monitorando tokens novos..."):
+        logging.info("✅ Conexão com Telegram OK!")
+    else:
+        logging.error("❌ Falha na conexão com Telegram!")
+        return
     
     # Loop principal
     while True:
@@ -265,8 +264,8 @@ def main():
             else:
                 logging.info("⏭ Nenhum token novo encontrado")
             
-            # Esperar tempo aleatório entre 5-10 minutos
-            wait_time = random.randint(300, 600)
+            # Esperar tempo aleatório entre 5-8 minutos
+            wait_time = random.randint(300, 480)
             logging.info(f"⏳ Próxima verificação em {wait_time//60} minutos...")
             time.sleep(wait_time)
             
