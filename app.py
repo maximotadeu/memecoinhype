@@ -17,22 +17,37 @@ CHAT_ID = os.environ.get('CHAT_ID')
 
 # APIs de segurança
 HONEYPOT_CHECK_API = "https://api.honeypot.is/v2/IsHoneypot"
-HONEYPOT_TAX_API = "https://api.honeypot.is/v1/GetTaxes"
 
-# URLs que FUNCIONAM com a API DexScreener
+# Chains suportadas (Ethereum, BSC, Solana)
 CHAINS = {
     "ethereum": {
-        "url": "https://api.dexscreener.com/latest/dex/tokens/0x2170ed0880ac9a755fd29b2688956bd959f933f8",
+        "url": "https://api.dexscreener.com/latest/dex/tokens/0x2170ed0880ac9a755fd29b2688956bd959f933f8",  # ETH
         "explorer": "https://etherscan.io/token/",
         "chain_id": "eth",
+        "native_token": "ETH",
         "enabled": True
     },
     "bsc": {
-        "url": "https://api.dexscreener.com/latest/dex/tokens/0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
-        "explorer": "https://bscscan.com/token/",
+        "url": "https://api.dexscreener.com/latest/dex/tokens/0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",  # BNB
+        "explorer": "https://bscscan.com/token/", 
         "chain_id": "bsc",
+        "native_token": "BNB",
+        "enabled": True
+    },
+    "solana": {
+        "url": "https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112",  # SOL
+        "explorer": "https://solscan.io/token/",
+        "chain_id": "sol",
+        "native_token": "SOL",
         "enabled": True
     }
+}
+
+# DEXs confiáveis por chain
+RELIABLE_DEXS = {
+    "ethereum": ["uniswap", "sushiswap", "pancakeswap", "shibaswap"],
+    "bsc": ["pancakeswap", "biswap", "apeswap", "babyswap"],
+    "solana": ["raydium", "orca", "jupiter", "meteora"]
 }
 
 # Para armazenar tokens já vistos
@@ -60,7 +75,10 @@ def send_telegram(message):
         return False
 
 def check_honeypot(chain, token_address):
-    """Verifica se é honeypot e retorna taxas"""
+    """Verifica se é honeypot (apenas para EVM chains)"""
+    if chain not in ["eth", "bsc"]:  # Solana não suporta honeypot.is
+        return True, 0, 0, "🔓 Rede não suporta verificação"
+    
     try:
         url = f"{HONEYPOT_CHECK_API}?chain={chain}&token={token_address}"
         response = requests.get(url, timeout=15)
@@ -73,28 +91,40 @@ def check_honeypot(chain, token_address):
             buy_tax = simulation.get("buyTax", 0)
             sell_tax = simulation.get("sellTax", 0)
             
-            return not is_honeypot, buy_tax, sell_tax
+            status = "✅ Sem honeypot" if not is_honeypot else "🚫 HONEYPOT"
+            return not is_honeypot, buy_tax, sell_tax, status
         
-        return True, 0, 0  # Se API falhar, assume seguro
+        return True, 0, 0, "⚠️ API indisponível"
         
     except Exception as e:
         logging.error(f"Erro Honeypot check: {e}")
-        return True, 0, 0  # Assume seguro em caso de erro
+        return True, 0, 0, "⚠️ Erro na verificação"
 
-def check_liquidity_lock(pair):
+def check_liquidity_lock(pair, chain):
     """Verifica indicadores de liquidez travada"""
     try:
-        # Verificar se é par em DEX confiável
         dex_id = pair.get("dexId", "").lower()
-        reliable_dexs = ["uniswap", "pancakeswap", "sushiswap", "raydium"]
         
-        is_reliable_dex = any(dex in dex_id for dex in reliable_dexs)
+        # Verificar se é DEX confiável para a chain
+        is_reliable_dex = any(dex in dex_id for dex in RELIABLE_DEXS.get(chain, []))
         
-        # Verificar liquidez - mínimo de segurança
+        # Verificar liquidez - mínimo por chain
         liquidity = pair.get("liquidity", {}).get("usd", 0)
-        has_min_liquidity = liquidity > 2000  # Mínimo absoluto
         
-        return is_reliable_dex and has_min_liquidity
+        # Mínimos diferentes por chain
+        min_liquidity = {
+            "ethereum": 5000,
+            "bsc": 3000, 
+            "solana": 2000  # Solana pode ter liquidez menor
+        }
+        
+        has_min_liquidity = liquidity > min_liquidity.get(chain, 2000)
+        
+        # Verificar volume mínimo
+        volume_24h = pair.get("volume", {}).get("h24", 0)
+        has_min_volume = volume_24h > 1000
+        
+        return is_reliable_dex and has_min_liquidity and has_min_volume
         
     except Exception as e:
         logging.error(f"Erro liquidity check: {e}")
@@ -112,7 +142,7 @@ def get_token_pairs(chain):
             pairs.sort(key=lambda x: x.get("volume", {}).get("h24", 0), reverse=True)
             
             logging.info(f"✅ {chain}: {len(pairs)} pares encontrados")
-            return pairs[:15]  # Pegar os 15 mais volume
+            return pairs[:20]  # Pegar os 20 com mais volume
             
         return []
     except Exception as e:
@@ -131,32 +161,34 @@ def analyze_token(pair, chain):
     volume_24h = pair.get("volume", {}).get("h24", 0) or 0
     price = pair.get("priceUsd", "0") or "0"
     created_at = pair.get("pairCreatedAt", 0)
+    dex_id = pair.get("dexId", "Unknown")
     
     # 🔒 VERIFICAÇÕES DE SEGURANÇA
     security_checks = []
     security_score = 0
     
-    # 1. Verificar Honeypot
-    is_safe, buy_tax, sell_tax = check_honeypot(CHAINS[chain]["chain_id"], token_address)
-    if not is_safe:
-        security_checks.append("🚫 HONEYPOT")
+    # 1. Verificar Honeypot (apenas EVM)
+    is_safe, buy_tax, sell_tax, honeypot_status = check_honeypot(CHAINS[chain]["chain_id"], token_address)
+    security_checks.append(honeypot_status)
+    
+    if "HONEYPOT" in honeypot_status:
         security_score -= 10
-    else:
-        security_checks.append(f"✅ Sem honeypot")
+    elif "✅" in honeypot_status:
         security_score += 2
     
-    # 2. Verificar taxas
-    if buy_tax > 15 or sell_tax > 15:
-        security_checks.append(f"⚠️ Taxas altas (Compra: {buy_tax}%, Venda: {sell_tax}%)")
-        security_score -= 2
-    else:
-        security_checks.append(f"✅ Taxas razoáveis (Compra: {buy_tax}%, Venda: {sell_tax}%)")
-        security_score += 1
+    # 2. Verificar taxas (apenas EVM)
+    if chain in ["ethereum", "bsc"]:
+        if buy_tax > 20 or sell_tax > 20:
+            security_checks.append(f"⚠️ Taxas altas (Compra: {buy_tax}%, Venda: {sell_tax}%)")
+            security_score -= 2
+        else:
+            security_checks.append(f"✅ Taxas OK (Compra: {buy_tax}%, Venda: {sell_tax}%)")
+            security_score += 1
     
-    # 3. Verificar liquidez mínima e DEX confiável
-    has_liquidity_lock = check_liquidity_lock(pair)
+    # 3. Verificar liquidez e DEX confiável
+    has_liquidity_lock = check_liquidity_lock(pair, chain)
     if has_liquidity_lock:
-        security_checks.append("✅ Liquidez OK")
+        security_checks.append("✅ Liquidez/DEX OK")
         security_score += 2
     else:
         security_checks.append("⚠️ Liquidez baixa/DEX não confiável")
@@ -182,14 +214,22 @@ def analyze_token(pair, chain):
     score = 0
     details = []
     
-    # Liquidez (com pesos diferentes)
-    if liquidity > 50000:
+    # Liquidez (com pesos diferentes por chain)
+    liquidity_thresholds = {
+        "ethereum": [50000, 20000, 5000],
+        "bsc": [30000, 10000, 3000],
+        "solana": [20000, 5000, 1000]
+    }
+    
+    thresholds = liquidity_thresholds.get(chain, [20000, 5000, 1000])
+    
+    if liquidity > thresholds[0]:
         score += 3
         details.append(f"💰 ${liquidity:,.0f}")
-    elif liquidity > 20000:
+    elif liquidity > thresholds[1]:
         score += 2
         details.append(f"💧 ${liquidity:,.0f}")
-    elif liquidity > 5000:
+    elif liquidity > thresholds[2]:
         score += 1
         details.append(f"💦 ${liquidity:,.0f}")
     else:
@@ -208,6 +248,14 @@ def analyze_token(pair, chain):
     # Adicionar score de segurança
     score += security_score
     
+    # Para Solana, ajustar critérios
+    if chain == "solana":
+        # Raydium é muito confiável
+        if "raydium" in dex_id.lower():
+            security_score += 1
+            score += 1
+            security_checks.append("✅ Raydium (Confiável)")
+    
     return {
         "address": token_address,
         "name": token_name,
@@ -224,29 +272,34 @@ def analyze_token(pair, chain):
         "sell_tax": sell_tax,
         "is_safe": is_safe and security_score >= 0,
         "url": pair.get("url", ""),
-        "dex": pair.get("dexId", ""),
-        "explorer": f"{CHAINS[chain]['explorer']}{token_address}"
+        "dex": dex_id,
+        "explorer": f"{CHAINS[chain]['explorer']}{token_address}",
+        "chain": chain
     }
 
 def create_message(analysis, chain):
     """Cria mensagem para Telegram com alertas de segurança"""
+    chain_display = chain.upper()
+    native_token = CHAINS[chain]["native_token"]
+    
     if not analysis["is_safe"]:
         emoji = "🚨"
-        message = f"{emoji} <b>ALERTA DE SEGURANÇA - {chain.upper()}</b>\n\n"
+        message = f"{emoji} <b>ALERTA - {chain_display}</b>\n\n"
     else:
-        emoji = "🚀" if analysis["score"] >= 5 else "⭐" if analysis["score"] >= 3 else "🔍"
-        message = f"{emoji} <b>TOKEN {chain.upper()}</b>\n\n"
+        emoji = "🚀" if analysis["score"] >= 6 else "⭐" if analysis["score"] >= 4 else "🔍"
+        message = f"{emoji} <b>TOKEN {chain_display}</b>\n\n"
     
     message += f"<b>{analysis['name']} ({analysis['symbol']})</b>\n"
     message += f"💵 <b>Preço:</b> ${analysis['price']}\n"
     message += f"⭐ <b>Score:</b> {analysis['score']}/10\n"
-    message += f"🛡️ <b>Segurança:</b> {analysis['security_score']}/5\n\n"
+    message += f"🛡️ <b>Segurança:</b> {analysis['security_score']}/5\n"
+    message += f"🏦 <b>Rede:</b> {chain_display} ({native_token})\n\n"
     
     message += "<b>📊 Estatísticas:</b>\n"
     for detail in analysis["details"]:
         message += f"• {detail}\n"
     
-    message += f"\n<b>🔒 Verificações de Segurança:</b>\n"
+    message += f"\n<b>🔒 Verificações:</b>\n"
     for check in analysis["security_checks"]:
         message += f"• {check}\n"
     
@@ -256,13 +309,13 @@ def create_message(analysis, chain):
     message += f"• <b>DEX:</b> {analysis['dex']}"
     
     if not analysis["is_safe"]:
-        message += f"\n\n🚨 <b>ATENÇÃO:</b> Este token pode não ser seguro!"
+        message += f"\n\n🚨 <b>ATENÇÃO:</b> Verifique cuidadosamente!"
     
     return message
 
 def monitor_tokens():
     """Monitora tokens com verificações de segurança"""
-    logging.info("🔍 Procurando tokens com verificações de segurança...")
+    logging.info("🔍 Procurando tokens em todas as chains...")
     tokens_encontrados = 0
     
     for chain in CHAINS:
@@ -285,13 +338,13 @@ def monitor_tokens():
                     
                     analysis = analyze_token(pair, chain)
                     
-                    # Notificar TODOS os tokens, mas com alertas de segurança
+                    # Notificar todos os tokens, mas com alertas claros
                     message = create_message(analysis, chain)
                     if send_telegram(message):
                         tokens_encontrados += 1
                         status = "SEGURO" if analysis["is_safe"] else "ALERTA"
                         logging.info(f"✅ {chain}: {analysis['symbol']} ({status})")
-                    time.sleep(2)  # Evitar rate limit
+                    time.sleep(1)
                     
         except Exception as e:
             logging.error(f"Erro em {chain}: {e}")
@@ -304,9 +357,9 @@ def main():
         logging.error("Configure TELEGRAM_TOKEN e CHAT_ID!")
         return
     
-    logging.info("🤖 Bot iniciado! Monitorando tokens com verificações de segurança...")
+    logging.info("🤖 Bot iniciado! Monitorando Ethereum, BSC e Solana...")
     
-    if send_telegram("🤖 <b>Bot de Segurança iniciado!</b>\n🔍 Monitorando tokens com verificações anti-honeypot..."):
+    if send_telegram("🤖 <b>Bot Multi-Chain iniciado!</b>\n🔍 Monitorando: ETH, BSC, SOL\n🛡️ Verificações de segurança ativas"):
         logging.info("✅ Conexão com Telegram OK!")
     
     while True:
